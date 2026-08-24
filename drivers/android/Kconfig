@@ -47,4 +47,11 @@ config ANDROID_BINDER_IPC_SELFTEST
 	  exhaustively with combinations of various buffer sizes and
 	  alignments.
 
+config ASHMEM
+	bool "Anonymous Shared Memory Subsystem"
+	depends on SHMEM
+	help
+	  Provide /dev/ashmem. Android 16 HIDL FMQ and SystemServer still
+	  create shared regions through this device node.
+
 endmenu
