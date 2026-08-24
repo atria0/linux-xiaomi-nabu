@@ -322,16 +322,28 @@ static int qcom_adreno_smmu_init_context(struct arm_smmu_domain *smmu_domain,
 	 * be AARCH64 stage 1 but double check because the arm-smmu code assumes
 	 * that is the case when the TTBR1 quirk is enabled
 	 */
+	/*
+	 * Initialize private interface with GPU. KGSL/MSM must stash a blank
+	 * struct adreno_smmu_priv in drvdata *before* attach. platform_dma_configure
+	 * runs with drvdata NULL; later KGSL of_dma_configure may still have
+	 * kgsl_device as drvdata (first field is a live device pointer).
+	 * Applying TTBR1 without a real priv makes the IOMMU aperture miss
+	 * dma-ranges and the GPU falls back to platform DMA ops.
+	 */
+	priv = dev_get_drvdata(dev);
+	if (!priv || priv->cookie || priv->get_ttbr1_cfg) {
+		if (!priv)
+			dev_warn(dev, "nabu_adreno_smmu: missing adreno_smmu_priv drvdata\n");
+		else
+			dev_info(dev, "nabu_adreno_smmu: drvdata is not a blank adreno_smmu_priv, skip TTBR1\n");
+		return 0;
+	}
+
 	if (qcom_adreno_can_do_ttbr1(smmu_domain->smmu) &&
 	    (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) &&
 	    (smmu_domain->cfg.fmt == ARM_SMMU_CTX_FMT_AARCH64))
 		pgtbl_cfg->quirks |= IO_PGTABLE_QUIRK_ARM_TTBR1;
 
-	/*
-	 * Initialize private interface with GPU:
-	 */
-
-	priv = dev_get_drvdata(dev);
 	priv->cookie = smmu_domain;
 	priv->get_ttbr1_cfg = qcom_adreno_smmu_get_ttbr1_cfg;
 	priv->set_ttbr0_cfg = qcom_adreno_smmu_set_ttbr0_cfg;

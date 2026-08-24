@@ -519,11 +519,16 @@ static int a6xx_rpmh_start(struct a6xx_gmu *gmu)
 	u32 val;
 
 	gmu_write(gmu, REG_A6XX_GMU_RSCC_CONTROL_REQ, BIT(1));
+	pr_emerg("nabu-gmu: rscc req readback=0x%x ack=0x%x\n",
+		 gmu_read(gmu, REG_A6XX_GMU_RSCC_CONTROL_REQ),
+		 gmu_read(gmu, REG_A6XX_GMU_RSCC_CONTROL_ACK));
 
 	ret = gmu_poll_timeout(gmu, REG_A6XX_GMU_RSCC_CONTROL_ACK, val,
 		val & (1 << 1), 100, 10000);
 	if (ret) {
 		DRM_DEV_ERROR(gmu->dev, "Unable to power on the GPU RSC\n");
+		pr_emerg("nabu-gmu: rscc timeout ack=0x%x\n",
+			 gmu_read(gmu, REG_A6XX_GMU_RSCC_CONTROL_ACK));
 		return ret;
 	}
 
@@ -1059,8 +1064,10 @@ int a6xx_gmu_resume(struct a6xx_gpu *a6xx_gpu)
 	struct a6xx_gmu *gmu = &a6xx_gpu->gmu;
 	int status, ret;
 
-	if (WARN(!gmu->initialized, "The GMU is not set up yet\n"))
+	if (WARN(!gmu->initialized, "The GMU is not set up yet\n")) {
+		pr_emerg("nabu-gmu: resume with initialized=0\n");
 		return -EINVAL;
+	}
 
 	gmu->hung = false;
 
@@ -1073,15 +1080,20 @@ int a6xx_gmu_resume(struct a6xx_gpu *a6xx_gpu)
 	}
 
 	/* Turn on the resources */
-	pm_runtime_get_sync(gmu->dev);
+	ret = pm_runtime_get_sync(gmu->dev);
+	pr_emerg("nabu-gmu: rpm_get(gmu->dev)=%d\n", ret);
 
 	/*
 	 * "enable" the GX power domain which won't actually do anything but it
 	 * will make sure that the refcounting is correct in case we need to
 	 * bring down the GX after a GMU failure
 	 */
-	if (!IS_ERR_OR_NULL(gmu->gxpd))
-		pm_runtime_get_sync(gmu->gxpd);
+	if (!IS_ERR_OR_NULL(gmu->gxpd)) {
+		ret = pm_runtime_get_sync(gmu->gxpd);
+		pr_emerg("nabu-gmu: rpm_get(gxpd)=%d\n", ret);
+	} else {
+		pr_emerg("nabu-gmu: gxpd=%pe\n", gmu->gxpd);
+	}
 
 	/* Use a known rate to bring up the GMU */
 	clk_set_rate(gmu->core_clk, 200000000);
@@ -1089,10 +1101,14 @@ int a6xx_gmu_resume(struct a6xx_gpu *a6xx_gpu)
 		     200000000 : 150000000);
 	ret = clk_bulk_prepare_enable(gmu->nr_clocks, gmu->clocks);
 	if (ret) {
+		pr_emerg("nabu-gmu: clk_bulk_prepare_enable=%d\n", ret);
 		pm_runtime_put(gmu->gxpd);
 		pm_runtime_put(gmu->dev);
 		return ret;
 	}
+
+	a6xx_gmu_rpmh_init(gmu);
+	pr_emerg("nabu-gmu: rpmh_init replayed with the domain powered\n");
 
 	/* Set the bus quota to a reasonable value for boot */
 	a6xx_gmu_set_initial_bw(gpu, gmu);
@@ -1118,12 +1134,17 @@ int a6xx_gmu_resume(struct a6xx_gpu *a6xx_gpu)
 	}
 
 	ret = a6xx_gmu_fw_start(gmu, status);
-	if (ret)
+	if (ret) {
+		pr_emerg("nabu-gmu: fw_start=%d status=%d legacy=%d\n", ret,
+			 status, gmu->legacy);
 		goto out;
+	}
 
 	ret = a6xx_hfi_start(gmu, status);
-	if (ret)
+	if (ret) {
+		pr_emerg("nabu-gmu: hfi_start=%d\n", ret);
 		goto out;
+	}
 
 	/*
 	 * Turn on the GMU firmware fault interrupt after we know the boot

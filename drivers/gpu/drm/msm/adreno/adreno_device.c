@@ -103,6 +103,8 @@ struct msm_gpu *adreno_load_gpu(struct drm_device *dev)
 	if (ret < 0) {
 		pm_runtime_put_noidle(&pdev->dev);
 		DRM_DEV_ERROR(dev->dev, "Couldn't power up the GPU: %d\n", ret);
+		panic("nabu: adreno_load_gpu failed: %d (runtime_error=%d)\n",
+		      ret, pdev->dev.power.runtime_error);
 		goto err_disable_rpm;
 	}
 

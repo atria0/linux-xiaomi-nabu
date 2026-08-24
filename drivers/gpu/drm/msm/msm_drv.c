@@ -889,7 +889,7 @@ static const struct file_operations fops = {
 	.show_fdinfo = drm_show_fdinfo,
 };
 
-static const struct drm_driver msm_driver = {
+static struct drm_driver msm_driver = {
 	.driver_features    = DRIVER_GEM |
 				DRIVER_RENDER |
 				DRIVER_ATOMIC |
@@ -914,6 +914,18 @@ static const struct drm_driver msm_driver = {
 	.minor              = MSM_VERSION_MINOR,
 	.patchlevel         = MSM_VERSION_PATCHLEVEL,
 };
+
+static int __init nabu_drm_name_setup(char *arg)
+{
+	if (!arg || !*arg)
+		return 0;
+	/* drmOpen() compares this against the name the caller asks for, and the
+	 * string has to outlive the call, so keep the boot argument itself. */
+	msm_driver.name = arg;
+	pr_info("msm: nabu_drm_name: reporting driver name as \"%s\"\n", arg);
+	return 0;
+}
+__setup("nabu_drm_name=", nabu_drm_name_setup);
 
 /*
  * Componentized driver support:

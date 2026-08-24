@@ -659,76 +659,87 @@ static int spi_geni_init(struct spi_geni_master *mas)
 	struct geni_se *se = &mas->se;
 	unsigned int proto, major, minor, ver;
 	u32 spi_tx_cfg, fifo_disable;
-	int ret = -ENXIO;
+	int ret;
 
-	pm_runtime_get_sync(mas->dev);
+	if (!se->wrapper) {
+		dev_err(mas->dev, "nabu-geni: missing QUP wrapper\n");
+		return -ENODEV;
+	}
+
+	ret = pm_runtime_get_sync(mas->dev);
+	if (ret < 0) {
+		dev_err(mas->dev, "nabu-geni: runtime_get failed %d\n", ret);
+		pm_runtime_put_noidle(mas->dev);
+		return ret;
+	}
 
 	proto = geni_se_read_proto(se);
+	dev_info(mas->dev, "nabu-geni: proto=%u\n", proto);
 
 	if (spi->target) {
 		if (proto != GENI_SE_SPI_SLAVE) {
 			dev_err(mas->dev, "Invalid proto %d\n", proto);
+			ret = -ENXIO;
 			goto out_pm;
 		}
 		spi_slv_setup(mas);
 	} else if (proto != GENI_SE_SPI) {
 		dev_err(mas->dev, "Invalid proto %d\n", proto);
+		ret = -ENXIO;
 		goto out_pm;
 	}
-	mas->tx_fifo_depth = geni_se_get_tx_fifo_depth(se);
 
-	/* Width of Tx and Rx FIFO is same */
-	mas->fifo_width_bits = geni_se_get_tx_fifo_width(se);
-
-	/*
-	 * Hardware programming guide suggests to configure
-	 * RX FIFO RFR level to fifo_depth-2.
-	 */
-	geni_se_init(se, mas->tx_fifo_depth - 3, mas->tx_fifo_depth - 2);
-	/* Transmit an entire FIFO worth of data per IRQ */
-	mas->tx_wm = 1;
 	ver = geni_se_get_qup_hw_version(se);
 	major = GENI_SE_VERSION_MAJOR(ver);
 	minor = GENI_SE_VERSION_MINOR(ver);
-
 	if (major == 1 && minor == 0)
 		mas->oversampling = 2;
 	else
 		mas->oversampling = 1;
 
 	fifo_disable = readl(se->base + GENI_IF_DISABLE_RO) & FIFO_IF_DISABLE;
-	switch (fifo_disable) {
-	case 1:
+	dev_info(mas->dev, "nabu-geni: qup=%u.%u fifo_disable=%u\n",
+		 major, minor, fifo_disable);
+
+	if (fifo_disable) {
+		/*
+		 * Match i2c-qcom-geni: a fused-off FIFO must not run
+		 * geni_se_init() or fall back to GENI_SE_FIFO. Those
+		 * writes hang GSI-only SEs on nabu and reset the board.
+		 */
 		ret = spi_geni_grab_gpi_chan(mas);
-		if (!ret) { /* success case */
-			mas->cur_xfer_mode = GENI_GPI_DMA;
-			geni_se_select_mode(se, GENI_GPI_DMA);
-			dev_dbg(mas->dev, "Using GPI DMA mode for SPI\n");
-			break;
-		} else if (ret == -EPROBE_DEFER) {
+		if (ret) {
+			dev_err(mas->dev,
+				"nabu-geni: GPI required but failed %d\n", ret);
 			goto out_pm;
 		}
-		/*
-		 * in case of failure to get gpi dma channel, we can still do the
-		 * FIFO mode, so fallthrough
-		 */
-		dev_warn(mas->dev, "FIFO mode disabled, but couldn't get DMA, fall back to FIFO mode\n");
-		fallthrough;
-
-	case 0:
+		mas->cur_xfer_mode = GENI_GPI_DMA;
+		geni_se_select_mode(se, GENI_GPI_DMA);
+		dev_info(mas->dev, "nabu-geni: GPI DMA mode\n");
+	} else {
+		mas->tx_fifo_depth = geni_se_get_tx_fifo_depth(se);
+		mas->fifo_width_bits = geni_se_get_tx_fifo_width(se);
+		if (!mas->tx_fifo_depth) {
+			dev_err(mas->dev, "nabu-geni: invalid TX FIFO depth\n");
+			ret = -EINVAL;
+			goto out_pm;
+		}
+		geni_se_init(se, mas->tx_fifo_depth - 3, mas->tx_fifo_depth - 2);
+		mas->tx_wm = 1;
 		mas->cur_xfer_mode = GENI_SE_FIFO;
 		geni_se_select_mode(se, GENI_SE_FIFO);
-		ret = 0;
-		break;
+		dev_info(mas->dev, "nabu-geni: FIFO mode depth=%u\n",
+			 mas->tx_fifo_depth);
 	}
 
-	/* We always control CS manually */
-	if (!spi->target) {
+	/* FIFO mode programs CS here; GSI sets CS from the TRE. */
+	if (!spi->target && mas->cur_xfer_mode == GENI_SE_FIFO) {
 		spi_tx_cfg = readl(se->base + SE_SPI_TRANS_CFG);
 		spi_tx_cfg &= ~CS_TOGGLE;
 		writel(spi_tx_cfg, se->base + SE_SPI_TRANS_CFG);
 	}
 
+	ret = 0;
 out_pm:
 	pm_runtime_put(mas->dev);
 	return ret;
@@ -1082,8 +1093,12 @@ static int spi_geni_probe(struct platform_device *pdev)
 	mas->dev = dev;
 	mas->se.dev = dev;
 	mas->se.wrapper = dev_get_drvdata(dev->parent);
+	if (!mas->se.wrapper)
+		return dev_err_probe(dev, -ENODEV,
+				     "nabu-geni: missing QUP wrapper\n");
 	mas->se.base = base;
 	mas->se.clk = clk;
+	dev_info(dev, "nabu-geni: probe start\n");
 
 	ret = devm_pm_opp_set_clkname(&pdev->dev, "se");
 	if (ret)
