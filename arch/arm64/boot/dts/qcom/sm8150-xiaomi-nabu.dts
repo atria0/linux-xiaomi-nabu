@@ -43,6 +43,26 @@
 		wifi0 = &wifi;
 	};
 
+	firmware {
+		android: android {
+			compatible = "android,firmware";
+			boot_devices = "soc@0/1d84000.ufshc";
+
+			fstab {
+				compatible = "android,fstab";
+
+				data {
+					dev = "/dev/block/by-name/userdata";
+					mnt_point = "/data";
+					type = "f2fs";
+					mnt_flags = "noatime,nosuid,nodev,discard,reserve_root=32768,resgid=1065,fsync_mode=nobarrier";
+					fsmgr_flags = "latemount,wait,check,formattable,quota,reservedsize=128M,checkpoint=fs,readahead_size_kb=128";
+					status = "ok";
+				};
+			};
+		};
+	};
+
 	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -103,12 +123,14 @@
 			no-map;
 		};
 
-		ramoops@b0000000 {
+		ramoops@a1600000 {
 			compatible = "ramoops";
-			reg = <0x0 0xb0000000 0x0 0x400000>;
-			record-size = <0x1000>;
-			console-size = <0x200000>;
+			reg = <0x0 0xa1600000 0x0 0x800000>;
+			record-size = <0x200000>;
+			console-size = <0x400000>;
+			pmsg-size = <0x200000>;
 			ecc-size = <16>;
+			max-reason = <4>;
 			no-map;
 		};
 
@@ -461,7 +483,7 @@
 
 	zap-shader {
 		memory-region = <&gpu_mem>;
-		firmware-name = "qcom/sm8150/xiaomi/nabu/a640_zap.mbn";
+		firmware-name = "a640_zap.mdt";
 	};
 };
 
@@ -748,6 +770,15 @@
 		flash-max-microamp = <1000000>;
 		flash-max-timeout-us = <1280000>;
 	};
+};
+
+&pon {
+	mode-recovery = <0x1>;
+	mode-bootloader = <0x2>;
+	mode-fastboot = <0x2>;
+	mode-rtc = <0x3>;
+	mode-normal = <0x20>;
+	mode-panic = <0x21>;
 };
 
 &pon_pwrkey {
