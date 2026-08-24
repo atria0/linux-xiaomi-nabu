@@ -45,8 +45,18 @@ static int __bpf_mt_check_fd(int fd, struct bpf_prog **ret)
 	struct bpf_prog *prog;
 
 	prog = bpf_prog_get_type(fd, BPF_PROG_TYPE_SOCKET_FILTER);
-	if (IS_ERR(prog))
-		return PTR_ERR(prog);
+	if (IS_ERR(prog)) {
+		int type_err = PTR_ERR(prog);
+
+		prog = bpf_prog_get(fd);
+		if (IS_ERR(prog)) {
+			pr_info_ratelimited("fd %d get failed: sock_filter=%d get=%ld\n",
+					    fd, type_err, PTR_ERR(prog));
+			return PTR_ERR(prog);
+		}
+		pr_info_ratelimited("fd %d accepted as type %u after sock_filter=%d\n",
+				    fd, prog->type, type_err);
+	}
 
 	*ret = prog;
 	return 0;
@@ -78,10 +88,14 @@ static int bpf_mt_check_v1(const struct xt_mtchk_param *par)
 		return __bpf_mt_check_bytecode(info->bpf_program,
 					       info->bpf_program_num_elem,
 					       &info->filter);
-	else if (info->mode == XT_BPF_MODE_FD_ELF)
-		return __bpf_mt_check_fd(info->fd, &info->filter);
-	else if (info->mode == XT_BPF_MODE_PATH_PINNED)
-		return __bpf_mt_check_path(info->path, &info->filter);
+	else if (info->mode == XT_BPF_MODE_FD_PINNED ||
+		 info->mode == XT_BPF_MODE_FD_ELF) {
+		if (info->fd >= 0)
+			return __bpf_mt_check_fd(info->fd, &info->filter);
+		if (info->path[0])
+			return __bpf_mt_check_path(info->path, &info->filter);
+		return -EINVAL;
+	}
 	else
 		return -EINVAL;
 }
