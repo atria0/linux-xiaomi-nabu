@@ -66,25 +66,6 @@ struct qcom_scm_mem_map_info {
 	__le64 mem_size;
 };
 
-/**
- * struct qcom_scm_qseecom_resp - QSEECOM SCM call response.
- * @result:    Result or status of the SCM call. See &enum qcom_scm_qseecom_result.
- * @resp_type: Type of the response. See &enum qcom_scm_qseecom_resp_type.
- * @data:      Response data. The type of this data is given in @resp_type.
- */
-struct qcom_scm_qseecom_resp {
-	u64 result;
-	u64 resp_type;
-	u64 data;
-};
-
-enum qcom_scm_qseecom_result {
-	QSEECOM_RESULT_SUCCESS			= 0,
-	QSEECOM_RESULT_INCOMPLETE		= 1,
-	QSEECOM_RESULT_BLOCKED_ON_LISTENER	= 2,
-	QSEECOM_RESULT_FAILURE			= 0xFFFFFFFF,
-};
-
 enum qcom_scm_qseecom_resp_type {
 	QSEECOM_SCM_RES_APP_ID			= 0xEE01,
 	QSEECOM_SCM_RES_QSEOS_LISTENER_ID	= 0xEE02,
@@ -99,12 +80,23 @@ enum qcom_scm_qseecom_tz_owner {
 enum qcom_scm_qseecom_tz_svc {
 	QSEECOM_TZ_SVC_APP_ID_PLACEHOLDER	= 0,
 	QSEECOM_TZ_SVC_APP_MGR			= 1,
+	QSEECOM_TZ_SVC_LISTENER			= 2,
 	QSEECOM_TZ_SVC_INFO			= 6,
 };
 
 enum qcom_scm_qseecom_tz_cmd_app {
 	QSEECOM_TZ_CMD_APP_SEND			= 1,
+	QSEECOM_TZ_CMD_APP_START		= 1,
+	QSEECOM_TZ_CMD_APP_SHUTDOWN		= 2,
 	QSEECOM_TZ_CMD_APP_LOOKUP		= 3,
+	QSEECOM_TZ_CMD_LOAD_SERVICE_IMAGE	= 7,
+};
+
+enum qcom_scm_qseecom_tz_cmd_listener {
+	QSEECOM_TZ_CMD_REGISTER_LISTENER		= 1,
+	QSEECOM_TZ_CMD_DEREGISTER_LISTENER		= 2,
+	QSEECOM_TZ_CMD_LISTENER_RESPONSE		= 3,
+	QSEECOM_TZ_CMD_REGISTER_LISTENER_SMCINVOKE	= 6,
 };
 
 enum qcom_scm_qseecom_tz_cmd_info {
@@ -1770,7 +1762,7 @@ static int qcom_scm_find_dload_address(struct device *dev, u64 *addr)
 static DEFINE_MUTEX(qcom_scm_qseecom_call_lock);
 
 static int __qcom_scm_qseecom_call(const struct qcom_scm_desc *desc,
-				   struct qcom_scm_qseecom_resp *res)
+				   struct qcom_scm_qseecom_response *res)
 {
 	struct qcom_scm_res scm_res = {};
 	int status;
@@ -1804,15 +1796,11 @@ static int __qcom_scm_qseecom_call(const struct qcom_scm_desc *desc,
  * Return: Zero on success, nonzero on failure.
  */
 static int qcom_scm_qseecom_call(const struct qcom_scm_desc *desc,
-				 struct qcom_scm_qseecom_resp *res)
+				 struct qcom_scm_qseecom_response *res)
 {
 	int status;
 
-	/*
-	 * Note: Multiple QSEECOM SCM calls should not be executed same time,
-	 * so lock things here. This needs to be extended to callback/listener
-	 * handling when support for that is implemented.
-	 */
+	/* Multiple QSEECOM SCM calls must not execute at the same time. */
 
 	mutex_lock(&qcom_scm_qseecom_call_lock);
 	status = __qcom_scm_qseecom_call(desc, res);
@@ -1827,17 +1815,6 @@ static int qcom_scm_qseecom_call(const struct qcom_scm_desc *desc,
 		return status;
 	}
 
-	/*
-	 * TODO: Handle incomplete and blocked calls:
-	 *
-	 * Incomplete and blocked calls are not supported yet. Some devices
-	 * and/or commands require those, some don't. Let's warn about them
-	 * prominently in case someone attempts to try these commands with a
-	 * device/command combination that isn't supported yet.
-	 */
-	WARN_ON(res->result == QSEECOM_RESULT_INCOMPLETE);
-	WARN_ON(res->result == QSEECOM_RESULT_BLOCKED_ON_LISTENER);
-
 	return 0;
 }
 
@@ -1850,10 +1827,10 @@ static int qcom_scm_qseecom_call(const struct qcom_scm_desc *desc,
  *
  * Return: Zero on success, nonzero on failure.
  */
-static int qcom_scm_qseecom_get_version(u32 *version)
+int qcom_scm_qseecom_get_version(u32 *version)
 {
 	struct qcom_scm_desc desc = {};
-	struct qcom_scm_qseecom_resp res = {};
+	struct qcom_scm_qseecom_response res = {};
 	u32 feature = 10;
 	int ret;
 
@@ -1870,6 +1847,60 @@ static int qcom_scm_qseecom_get_version(u32 *version)
 	*version = res.result;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(qcom_scm_qseecom_get_version);
+
+static int qcom_scm_qseecom_load_image(void *image, size_t mdt_len,
+				       size_t image_len, u32 command,
+				       u32 *app_id)
+{
+	struct qcom_scm_qseecom_response res = {};
+	struct qcom_scm_desc desc = {};
+	int status;
+
+	if (!image || !mdt_len || mdt_len > image_len)
+		return -EINVAL;
+
+	desc.owner = QSEECOM_TZ_OWNER_QSEE_OS;
+	desc.svc = QSEECOM_TZ_SVC_APP_MGR;
+	desc.cmd = command;
+	desc.arginfo = QCOM_SCM_ARGS(3, QCOM_SCM_VAL, QCOM_SCM_VAL,
+				     QCOM_SCM_VAL);
+	desc.args[0] = mdt_len;
+	desc.args[1] = image_len;
+	desc.args[2] = qcom_tzmem_to_phys(image);
+
+	status = qcom_scm_qseecom_call(&desc, &res);
+	if (status)
+		return status;
+
+	if (res.result != QCOM_QSEECOM_RESULT_SUCCESS)
+		return -EIO;
+
+	if (app_id)
+		*app_id = res.data;
+
+	return 0;
+}
+
+int qcom_scm_qseecom_app_start(void *image, size_t mdt_len,
+			       size_t image_len, u32 *app_id)
+{
+	if (!app_id)
+		return -EINVAL;
+
+	return qcom_scm_qseecom_load_image(image, mdt_len, image_len,
+					   QSEECOM_TZ_CMD_APP_START, app_id);
+}
+EXPORT_SYMBOL_GPL(qcom_scm_qseecom_app_start);
+
+int qcom_scm_qseecom_load_service_image(void *image, size_t mdt_len,
+					 size_t image_len)
+{
+	return qcom_scm_qseecom_load_image(image, mdt_len, image_len,
+					   QSEECOM_TZ_CMD_LOAD_SERVICE_IMAGE,
+					   NULL);
+}
+EXPORT_SYMBOL_GPL(qcom_scm_qseecom_load_service_image);
 
 /**
  * qcom_scm_qseecom_app_get_id() - Query the app ID for a given QSEE app name.
@@ -1888,7 +1919,7 @@ int qcom_scm_qseecom_app_get_id(const char *app_name, u32 *app_id)
 	unsigned long name_buf_size = QSEECOM_MAX_APP_NAME_SIZE;
 	unsigned long app_name_len = strlen(app_name);
 	struct qcom_scm_desc desc = {};
-	struct qcom_scm_qseecom_resp res = {};
+	struct qcom_scm_qseecom_response res = {};
 	int status;
 
 	if (app_name_len >= name_buf_size)
@@ -1914,10 +1945,10 @@ int qcom_scm_qseecom_app_get_id(const char *app_name, u32 *app_id)
 	if (status)
 		return status;
 
-	if (res.result == QSEECOM_RESULT_FAILURE)
+	if (res.result == QCOM_QSEECOM_RESULT_FAILURE)
 		return -ENOENT;
 
-	if (res.result != QSEECOM_RESULT_SUCCESS)
+	if (res.result != QCOM_QSEECOM_RESULT_SUCCESS)
 		return -EINVAL;
 
 	if (res.resp_type != QSEECOM_SCM_RES_APP_ID)
@@ -1944,15 +1975,19 @@ EXPORT_SYMBOL_GPL(qcom_scm_qseecom_app_get_id);
  *
  * Return: Zero on success, nonzero on failure.
  */
-int qcom_scm_qseecom_app_send(u32 app_id, void *req, size_t req_size,
-			      void *rsp, size_t rsp_size)
+int qcom_scm_qseecom_app_send_raw(u32 app_id, void *req, size_t req_size,
+				  void *rsp, size_t rsp_size,
+				  struct qcom_scm_qseecom_response *response)
 {
-	struct qcom_scm_qseecom_resp res = {};
 	struct qcom_scm_desc desc = {};
 	phys_addr_t req_phys;
 	phys_addr_t rsp_phys;
 	int status;
 
+	if (!response)
+		return -EINVAL;
+
+	memset(response, 0, sizeof(*response));
 	req_phys = qcom_tzmem_to_phys(req);
 	rsp_phys = qcom_tzmem_to_phys(rsp);
 
@@ -1968,17 +2003,121 @@ int qcom_scm_qseecom_app_send(u32 app_id, void *req, size_t req_size,
 	desc.args[3] = rsp_phys;
 	desc.args[4] = rsp_size;
 
-	status = qcom_scm_qseecom_call(&desc, &res);
+	status = qcom_scm_qseecom_call(&desc, response);
 
+	if (status || response->result != QCOM_QSEECOM_RESULT_SUCCESS)
+		pr_err_ratelimited("qseecom app_send app=%u scm_status=%d result=%llu resp_type=%llu data=%llu\n",
+				   app_id, status, response->result,
+				   response->resp_type, response->data);
+
+	return status;
+}
+EXPORT_SYMBOL_GPL(qcom_scm_qseecom_app_send_raw);
+
+int qcom_scm_qseecom_app_send(u32 app_id, void *req, size_t req_size,
+			      void *rsp, size_t rsp_size)
+{
+	struct qcom_scm_qseecom_response response;
+	int status;
+
+	status = qcom_scm_qseecom_app_send_raw(app_id, req, req_size, rsp,
+						  rsp_size, &response);
 	if (status)
 		return status;
-
-	if (res.result != QSEECOM_RESULT_SUCCESS)
+	if (response.result != QCOM_QSEECOM_RESULT_SUCCESS)
 		return -EIO;
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(qcom_scm_qseecom_app_send);
+
+static int qcom_scm_qseecom_register_listener_command(u32 listener_id,
+						void *buffer, size_t size,
+						u32 command)
+{
+	struct qcom_scm_qseecom_response response = {};
+	struct qcom_scm_desc desc = {};
+	int status;
+
+	desc.owner = QSEECOM_TZ_OWNER_QSEE_OS;
+	desc.svc = QSEECOM_TZ_SVC_LISTENER;
+	desc.cmd = command;
+	desc.arginfo = QCOM_SCM_ARGS(3, QCOM_SCM_VAL, QCOM_SCM_RW,
+				     QCOM_SCM_VAL);
+	desc.args[0] = listener_id;
+	desc.args[1] = qcom_tzmem_to_phys(buffer);
+	desc.args[2] = size;
+
+	status = qcom_scm_qseecom_call(&desc, &response);
+	if (status)
+		return status;
+	if (response.result != QCOM_QSEECOM_RESULT_SUCCESS)
+		return -EIO;
+
+	return 0;
+}
+
+int qcom_scm_qseecom_register_listener(u32 listener_id, void *buffer,
+				       size_t size)
+{
+	int status;
+
+	if (!buffer || !size)
+		return -EINVAL;
+
+	status = qcom_scm_qseecom_register_listener_command(
+				listener_id, buffer, size,
+				QSEECOM_TZ_CMD_REGISTER_LISTENER_SMCINVOKE);
+	if (status == -EOPNOTSUPP)
+		status = qcom_scm_qseecom_register_listener_command(
+				listener_id, buffer, size,
+				QSEECOM_TZ_CMD_REGISTER_LISTENER);
+
+	return status;
+}
+EXPORT_SYMBOL_GPL(qcom_scm_qseecom_register_listener);
+
+int qcom_scm_qseecom_unregister_listener(u32 listener_id)
+{
+	struct qcom_scm_qseecom_response response = {};
+	struct qcom_scm_desc desc = {};
+	int status;
+
+	desc.owner = QSEECOM_TZ_OWNER_QSEE_OS;
+	desc.svc = QSEECOM_TZ_SVC_LISTENER;
+	desc.cmd = QSEECOM_TZ_CMD_DEREGISTER_LISTENER;
+	desc.arginfo = QCOM_SCM_ARGS(1, QCOM_SCM_VAL);
+	desc.args[0] = listener_id;
+
+	status = qcom_scm_qseecom_call(&desc, &response);
+	if (status)
+		return status;
+	if (response.result != QCOM_QSEECOM_RESULT_SUCCESS)
+		return -EIO;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(qcom_scm_qseecom_unregister_listener);
+
+int qcom_scm_qseecom_listener_response(u32 listener_id, u32 status,
+				       struct qcom_scm_qseecom_response *response)
+{
+	struct qcom_scm_desc desc = {};
+
+	if (!response)
+		return -EINVAL;
+
+	memset(response, 0, sizeof(*response));
+	desc.owner = QSEECOM_TZ_OWNER_QSEE_OS;
+	desc.svc = QSEECOM_TZ_SVC_LISTENER;
+	desc.cmd = QSEECOM_TZ_CMD_LISTENER_RESPONSE;
+	desc.arginfo = QCOM_SCM_ARGS(2, QCOM_SCM_VAL, QCOM_SCM_VAL);
+	desc.args[0] = listener_id;
+	desc.args[1] = status;
+
+	return qcom_scm_qseecom_call(&desc, response);
+}
+EXPORT_SYMBOL_GPL(qcom_scm_qseecom_listener_response);
 
 /*
  * We do not yet support re-entrant calls via the qseecom interface. To prevent
@@ -2002,6 +2141,7 @@ static const struct of_device_id qcom_scm_qseecom_allowlist[] __maybe_unused = {
 	{ .compatible = "qcom,x1e80100-crd" },
 	{ .compatible = "qcom,x1e80100-qcp" },
 	{ .compatible = "qcom,x1p42100-crd" },
+	{ .compatible = "xiaomi,nabu" },
 	{ }
 };
 

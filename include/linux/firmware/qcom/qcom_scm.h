@@ -154,15 +154,58 @@ int qcom_scm_shm_bridge_create(struct device *dev, u64 pfn_and_ns_perm_flags,
 			       u64 ns_vmids, u64 *handle);
 int qcom_scm_shm_bridge_delete(struct device *dev, u64 handle);
 
+enum qcom_scm_qseecom_result {
+	QCOM_QSEECOM_RESULT_SUCCESS			= 0,
+	QCOM_QSEECOM_RESULT_INCOMPLETE			= 1,
+	QCOM_QSEECOM_RESULT_BLOCKED_ON_LISTENER	= 2,
+	QCOM_QSEECOM_RESULT_FAILURE			= 0xFFFFFFFF,
+};
+
+struct qcom_scm_qseecom_response {
+	u64 result;
+	u64 resp_type;
+	u64 data;
+};
 #ifdef CONFIG_QCOM_QSEECOM
 
+int qcom_scm_qseecom_get_version(u32 *version);
 int qcom_scm_qseecom_app_get_id(const char *app_name, u32 *app_id);
+int qcom_scm_qseecom_app_start(void *image, size_t mdt_len, size_t image_len,
+			       u32 *app_id);
+int qcom_scm_qseecom_load_service_image(void *image, size_t mdt_len,
+					 size_t image_len);
 int qcom_scm_qseecom_app_send(u32 app_id, void *req, size_t req_size,
 			      void *rsp, size_t rsp_size);
+int qcom_scm_qseecom_app_send_raw(u32 app_id, void *req, size_t req_size,
+				  void *rsp, size_t rsp_size,
+				  struct qcom_scm_qseecom_response *response);
+int qcom_scm_qseecom_register_listener(u32 listener_id, void *buffer,
+				       size_t size);
+int qcom_scm_qseecom_unregister_listener(u32 listener_id);
+int qcom_scm_qseecom_listener_response(u32 listener_id, u32 status,
+				       struct qcom_scm_qseecom_response *response);
 
 #else /* CONFIG_QCOM_QSEECOM */
 
+static inline int qcom_scm_qseecom_get_version(u32 *version)
+{
+	return -EINVAL;
+}
+
 static inline int qcom_scm_qseecom_app_get_id(const char *app_name, u32 *app_id)
+{
+	return -EINVAL;
+}
+
+static inline int qcom_scm_qseecom_app_start(void *image, size_t mdt_len,
+					      size_t image_len, u32 *app_id)
+{
+	return -EINVAL;
+}
+
+static inline int qcom_scm_qseecom_load_service_image(void *image,
+						       size_t mdt_len,
+						       size_t image_len)
 {
 	return -EINVAL;
 }
@@ -170,6 +213,32 @@ static inline int qcom_scm_qseecom_app_get_id(const char *app_name, u32 *app_id)
 static inline int qcom_scm_qseecom_app_send(u32 app_id,
 					    void *req, size_t req_size,
 					    void *rsp, size_t rsp_size)
+{
+	return -EINVAL;
+}
+
+static inline int qcom_scm_qseecom_app_send_raw(
+					u32 app_id, void *req, size_t req_size,
+					void *rsp, size_t rsp_size,
+					struct qcom_scm_qseecom_response *response)
+{
+	return -EINVAL;
+}
+
+static inline int qcom_scm_qseecom_register_listener(u32 listener_id,
+						       void *buffer, size_t size)
+{
+	return -EINVAL;
+}
+
+static inline int qcom_scm_qseecom_unregister_listener(u32 listener_id)
+{
+	return -EINVAL;
+}
+
+static inline int qcom_scm_qseecom_listener_response(
+					u32 listener_id, u32 status,
+					struct qcom_scm_qseecom_response *response)
 {
 	return -EINVAL;
 }
