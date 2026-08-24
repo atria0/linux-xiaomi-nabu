@@ -132,6 +132,15 @@ static ssize_t sel_read_enforce(struct file *filp, char __user *buf,
 }
 
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
+static bool nabu_selinux_locked_permissive;
+
+static int __init nabu_selinux_permissive_setup(char *arg)
+{
+	nabu_selinux_locked_permissive = !arg || arg[0] != '0';
+	return 0;
+}
+__setup("nabu_selinux_permissive", nabu_selinux_permissive_setup);
+
 static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 				 size_t count, loff_t *ppos)
 
@@ -157,6 +166,12 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 		goto out;
 
 	new_value = !!scan_value;
+
+	if (nabu_selinux_locked_permissive && new_value) {
+		pr_warn_once("selinux: nabu_selinux_permissive refuses setenforce 1\n");
+		length = count;
+		goto out;
+	}
 
 	old_value = enforcing_enabled();
 	if (new_value != old_value) {

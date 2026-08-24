@@ -11,6 +11,52 @@
 
 static DEFINE_MUTEX(pmsg_lock);
 
+static bool nabu_pmsg_mirror_enabled;
+
+static int __init nabu_pmsg_mirror_setup(char *arg)
+{
+	nabu_pmsg_mirror_enabled = !arg || arg[0] != '0';
+	return 0;
+}
+__setup("nabu_pmsg_mirror", nabu_pmsg_mirror_setup);
+
+/*
+ * liblog prefixes each write with a packed android_pmsg_log_header_t (7 bytes)
+ * and android_log_header_t (11 bytes); the text after them is a priority byte
+ * followed by a NUL separated tag and message.
+ */
+#define NABU_PMSG_HEADER_BYTES 18
+#define NABU_PMSG_MIRROR_MAX 512
+
+static void nabu_pmsg_mirror(const char __user *buf, size_t count)
+{
+	char line[NABU_PMSG_MIRROR_MAX];
+	size_t copied;
+	size_t i;
+
+	if (!nabu_pmsg_mirror_enabled)
+		return;
+	if (count <= NABU_PMSG_HEADER_BYTES)
+		return;
+
+	copied = min(count, sizeof(line) - 1);
+	if (copy_from_user(line, buf, copied))
+		return;
+	line[copied] = '\0';
+
+	/*
+	 * The headers and the tag/message separators are not printable, and a
+	 * record can carry an embedded newline that would split the printk into
+	 * an unattributed second line.
+	 */
+	for (i = 0; i < copied; i++) {
+		if (line[i] < 0x20 || line[i] > 0x7e)
+			line[i] = ' ';
+	}
+
+	pr_info("nabu-logcat:%s\n", line + NABU_PMSG_HEADER_BYTES);
+}
+
 static ssize_t write_pmsg(struct file *file, const char __user *buf,
 			  size_t count, loff_t *ppos)
 {
@@ -27,6 +73,8 @@ static ssize_t write_pmsg(struct file *file, const char __user *buf,
 	/* check outside lock, page in any data. write_user also checks */
 	if (!access_ok(buf, count))
 		return -EFAULT;
+
+	nabu_pmsg_mirror(buf, count);
 
 	mutex_lock(&pmsg_lock);
 	ret = psinfo->write_user(&record, buf);

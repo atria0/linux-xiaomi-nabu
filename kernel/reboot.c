@@ -18,6 +18,7 @@
 #include <linux/syscalls.h>
 #include <linux/syscore_ops.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 
 /*
  * this indicates whether you can reboot with ctrl-alt-del: the default is yes
@@ -1365,3 +1366,35 @@ static int __init reboot_ksysfs_init(void)
 late_initcall(reboot_ksysfs_init);
 
 #endif
+
+static unsigned int nabu_autoreboot_secs;
+
+static int __init nabu_autoreboot_setup(char *str)
+{
+	if (kstrtouint(str, 10, &nabu_autoreboot_secs))
+		nabu_autoreboot_secs = 0;
+	return 1;
+}
+__setup("nabu_autoreboot=", nabu_autoreboot_setup);
+
+static void nabu_autoreboot_fire(struct work_struct *work)
+{
+	pr_emerg("nabu_autoreboot: restarting into the bootloader after %u s\n",
+		 nabu_autoreboot_secs);
+	kernel_restart("bootloader");
+}
+
+static DECLARE_DELAYED_WORK(nabu_autoreboot_work, nabu_autoreboot_fire);
+
+static int __init nabu_autoreboot_arm(void)
+{
+	if (!nabu_autoreboot_secs)
+		return 0;
+
+	pr_emerg("nabu_autoreboot: will restart into the bootloader in %u s\n",
+		 nabu_autoreboot_secs);
+	schedule_delayed_work(&nabu_autoreboot_work,
+			      msecs_to_jiffies(nabu_autoreboot_secs * 1000U));
+	return 0;
+}
+late_initcall(nabu_autoreboot_arm);
