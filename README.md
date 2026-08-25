@@ -3,6 +3,15 @@ Xiaomi Pad 5 (nabu) Linux kernel
 
 This is a Linux kernel tree for Xiaomi Pad 5 (`qcom/sm8150-xiaomi-nabu`).
 
+Related repositories
+--------------------
+
+| Repository | Role | License |
+| --- | --- | --- |
+| this tree | Kernel | GPL-2.0-only |
+| [android_device_xiaomi_nabu](https://github.com/SeimoDev/android_device_xiaomi_nabu) | Device, boot packing, vendor path adapt | Apache-2.0 |
+| [firmware-xiaomi-nabu](https://github.com/SeimoDev/firmware-xiaomi-nabu) | Firmware index | See WHENCE |
+
 Base
 ----
 
@@ -19,14 +28,35 @@ Build
 -----
 
 ```sh
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-  defconfig xiaomi_nabu_defconfig
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) \
-  Image.gz dtbs
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- xiaomi_nabu_defconfig
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image.gz dtbs
 ```
 
 Device tree: `arch/arm64/boot/dts/qcom/sm8150-xiaomi-nabu.dts`
 Defconfig: `arch/arm64/configs/xiaomi_nabu_defconfig`
+
+In an AOSP tree, clone this repository as `kernel/xiaomi/nabu`.
+
+Booting
+-------
+
+This tree is source only. Qualcomm ABL on nabu does not boot a bare
+`Image.gz`. Pack Android **boot header v3** (`boot.img` plus
+`vendor_boot.img`) and erase `dtbo`, as documented in
+android_device_xiaomi_nabu.
+
+ABL stays in the bootloader if:
+
+1. You flash `Image.gz` instead of a header-v3 `boot.img` with ramdisk
+2. You keep a 4.14 `vendor_boot` or `dtbo` with this kernel
+3. Kernel + ramdisk exceed about 34 MiB (Load Error)
+4. `CONFIG_SPI_QCOM_GENI` or `CONFIG_TOUCHSCREEN_NT36523_SPI` is builtin
+   or loaded too early
+5. Init fatals with `androidboot.init_fatal_reboot_target=bootloader`
+
+Use `boot/pack-boot.sh` from android_device_xiaomi_nabu. Volume-down is
+an XBL PMIC S2 hard-reset; do not hold it after the fastboot screen
+appears.
 
 Hardware status
 ---------------
