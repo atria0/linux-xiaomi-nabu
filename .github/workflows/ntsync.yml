@@ -1,0 +1,95 @@
+name: 构建ntsync模块
+
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Kernel
+    runs-on: ubuntu-22.04
+    steps:
+
+      - name: Get branch
+        id: branch
+        uses: tj-actions/branch-names@v8
+
+      - name: Set SWAP
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 1
+
+      - name: Setup environment
+        run: |
+           sudo apt install libncurses-dev device-tree-compiler gawk git git-lfs flex bison openssl libssl-dev dkms libelf-dev libudev-dev libpci-dev libiberty-dev autoconf llvm gcc-aarch64-linux-gnu
+
+      - name: Get source
+        run: |
+          git clone https://github.com/atria0/linux-xiaomi-nabu.git $GITHUB_WORKSPACE/kernel
+
+      - name: Build module
+        run: |
+      
+      - name: Verify output
+        run: |
+          if [ -f $GITHUB_WORKSPACE/kernel/ ]; then
+            echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
+          else
+            echo "Error: Kernel Image not generated!"
+            exit 1
+          fi
+      - name: Package kernel
+        if: env.CHECK_FILE_IS_OK == 'true'
+        run: |
+          rm -rf $GITHUB_WORKSPACE/workdir/ak3
+          git clone https://github.com/Winkmoon/AnyKernel3.git $GITHUB_WORKSPACE/workdir/ak3
+          if [ ! -f $GITHUB_WORKSPACE/workdir/source/out/arch/arm64/boot/Image ]; then
+            echo "Error: Kernel Image missing during packaging!"
+            exit 1
+          fi
+          cp $GITHUB_WORKSPACE/workdir/source/out/arch/arm64/boot/Image $GITHUB_WORKSPACE/workdir/ak3
+          cd $GITHUB_WORKSPACE/workdir/ak3
+          zip -r9 ./AnyKernel3-${{ env.BUILD_TIME }}.zip ./*
+          if [ ! -f ./AnyKernel3-${{ env.BUILD_TIME }}.zip ]; then
+            echo "Error: Zip package not generated!"
+            echo "Current files in ak3 directory:"
+            ls -la
+            exit 1
+          fi
+          echo "Successfully generated zip package:"
+          ls -la ./AnyKernel3-${{ env.BUILD_TIME }}.zip
+      - name: Upload artifacts (备份)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-${{ env.BUILD_TIME }}
+          path: ${{ github.workspace }}/workdir/ak3/*.zip
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: kernel-${{ env.BUILD_TIME }}
+          release_name: 小米平板5 HyperOS 内核 ${{ env.BUILD_TIME }} SukiSU
+          draft: false
+          prerelease: false  # 是否为预发布（false = 正式版，true = 测试版）
+          body: |
+            ## 小米平板5 (nabu) HyperOS 内核构建
+            - 构建时间：${{ env.BUILD_TIME }}
+            - 集成特性：SukiSU-nongki
+            - 打包工具：AnyKernel3
+            - 适用系统：MIUI13-HyperOS
+            - 构建环境：Ubuntu 22.04 + Proton Clang 20210522
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}/workdir/ak3/AnyKernel3-${{ env.BUILD_TIME }}.zip
+          asset_name: AnyKernel3-${{ env.BUILD_TIME }}.zip
+          asset_content_type: application/zip
+          
